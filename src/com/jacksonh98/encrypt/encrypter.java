@@ -31,7 +31,7 @@ public class encrypter implements ActionListener {
 	
 	private String 		
 						AES = "AES/CBC/PKCS5Padding",
-						keyFileLocation = "D:\\Documents\\Encryption test\\secretKey.key",
+						keyFileLocation = "D:\\Documents\\Encryption test\\secretKey.key", //Change to generic location - AppData?
 						actingOnFile = null,
 						encryptExtension = ".encrypted",
 						IvSpecString = null;
@@ -43,16 +43,16 @@ public class encrypter implements ActionListener {
 	private static int TYPE_FILE = 1;
 	private static int TYPE_DIR = 2;
 	
-	private IvParameterSpec ivspec = generateIV(false);
+	private IvParameterSpec ivspec;
 	private SecretKey privateKey; //Encryption key
 	
 	private JFrame frmEncrypter;
 	private JTextField textField;
-	public JButton btnDecrypt;
-	public JButton btnEncrypt;
-	public JButton btnFileSelector;
-	JFileChooser JFChooser = new JFileChooser();
-	FileExplorer fileExp = new FileExplorer();
+	private JButton btnDecrypt;
+	private JButton btnEncrypt;
+	private JButton btnFileSelector;
+	private JFileChooser JFChooser = new JFileChooser();
+	private FileExplorer fileExp = new FileExplorer();
 	
 	
 	public static void main(String args[]) throws FileNotFoundException, NoSuchAlgorithmException, IOException {
@@ -60,17 +60,19 @@ public class encrypter implements ActionListener {
 	}
 	
 	public encrypter() throws FileNotFoundException, IOException, NoSuchAlgorithmException {
+		//Load or generate a new keyfile
 		File keyFile = new File(keyFileLocation);
-		if(keyFile.exists()) {
+		if(keyFile.exists()) { //Check if a keyfile can be found at specified location
 			loadKeyFile(keyFileLocation);
 			System.out.println("Loaded keyfile");
 			}
 		else {
-			System.out.println("Could not find keyfile at " + keyFile.getAbsolutePath() + ", generating a new key...");
+			System.out.printf("Could not find keyfile at %s, generating a new key...\n", keyFileLocation);
 			privateKey = generateKey();
 			saveKeyFile(keyFileLocation, privateKey);
 		}
 		
+		//Open GUI
 		initialize();
 		
 	}
@@ -100,8 +102,30 @@ public class encrypter implements ActionListener {
 	private boolean runCipher(int cipherMode) {
 		
 		try {
+			byte[] deIv = new byte[16];
 			File fileTarget = new File(actingOnFile); //Target file to encrypt or decrypt
 			Cipher ci = Cipher.getInstance(AES); //Use AES
+			if(cipherMode == Cipher.ENCRYPT_MODE) {
+				ivspec = generateIV(true); //Generate a new IV for every file encrypted
+				String ivString = new String(ivspec.getIV());
+				System.out.println("Generated ivspec " + ivString + " for file " + fileTarget.getAbsolutePath());
+			}
+			else if(cipherMode == Cipher.DECRYPT_MODE) {
+				//TODO: Retrieve IvSpec
+				
+				try (FileInputStream in = new FileInputStream(fileTarget)) {
+
+						in.read(deIv);
+						ivspec = new IvParameterSpec(deIv);
+						String ivString = new String(ivspec.getIV());
+						System.out.println("Found ivspec " + ivString + " for file " + fileTarget.getAbsolutePath());
+			        }
+				
+				catch (Exception ex) { 
+					ex.printStackTrace();
+				}
+				
+			}
 			ci.init(cipherMode, privateKey, ivspec); //Initiate cipher
 			processFile(ci, fileTarget, cipherMode); //Process file with cipher
 			return true;
@@ -139,36 +163,60 @@ public class encrypter implements ActionListener {
 		
 		if(cipherMode == Cipher.DECRYPT_MODE) {
 			
+			//Check if the specified file is encrypted
 			if(!inFile.getAbsolutePath().contains(encryptExtension)) {
 				System.out.println("File is not encrypted!");
 				return false;
 			}
-			String outputString = inFile.getAbsolutePath().replace(encryptExtension, "");
+			String outputString = inFile.getAbsolutePath().replace(encryptExtension, ""); //Remove encrypted extension
 			outFile = new File(outputString);
 			inFile = new File(inFile.getAbsolutePath());
+			System.out.printf("Decrypting file %s to location %s", inFile.getAbsolutePath(), outFile.getAbsolutePath());
 		}
 		else if(cipherMode == Cipher.ENCRYPT_MODE) {
 			
+			//Check if the specified file is already encrypted
 			if(inFile.getAbsolutePath().contains(encryptExtension)) {
 				System.out.println("File is encrypted!");
 				return false;
 			}
 			
 			 //Add .encrypted to the encrypted file
-			outFile = new File(inFile.getAbsolutePath()+encryptExtension); 
+			outFile = new File(inFile.getAbsolutePath()+encryptExtension); //Append encrypted extension to file name
 			inFile = new File(inFile.getAbsolutePath());
 		}
 		
-		System.out.println("Input: " + inFile.getAbsolutePath());
-		System.out.println("Output: " + outFile.getAbsolutePath());
+		System.out.printf("Input: %s\n", inFile.getAbsolutePath());
+		System.out.printf("Output: %s\n", outFile.getAbsolutePath());
 
+		//Read input file and then write output file
 		try (FileInputStream in = new FileInputStream(inFile);
 	             FileOutputStream out = new FileOutputStream(outFile)) {
 	            byte[] ibuf = new byte[8192];
-	            int len;
+	            int len, parseValue = 0;
 	            while ((len = in.read(ibuf)) != -1) {
+	            	
+	            	//Remove IV from input as we decrypt
+	            	if(cipherMode == Cipher.DECRYPT_MODE) {
+	            		if(parseValue == 0) {
+	            			parseValue++;
+	            			for(int i = 0; i < ibuf.length; i++) {
+	            				if(i < ibuf.length-16)
+	            					ibuf[i] = ibuf[i+16]; //Shuffle all bits back 16 bits
+	            				else ibuf[i] = '\0'; //Delete last 16 bits
+	            			}
+	            			len -= 16; //Tell the cipher to ignore the last 16 bits
+	            		}
+	            	}
+	            	
 	                byte[] obuf = cipher.update(ibuf, 0, len);
-	                if ( obuf != null ) out.write(obuf);
+	                if ( obuf != null ) {
+	                	if(cipherMode == Cipher.ENCRYPT_MODE) if(parseValue == 0) {
+	                		out.write(IvSpecByte); //Write the generated Iv into the file
+	                		parseValue++;
+	                	}
+	                	out.write(obuf);
+	                }
 	            }
 	            byte[] obuf = cipher.doFinal();
 	            if ( obuf != null ) {
@@ -194,14 +242,15 @@ public class encrypter implements ActionListener {
 		else for(byte i = 0; i < bIvSpec.length; i++) bIvSpec[i] = i; //Simple IV for testing
 		
 		IvSpecByte = bIvSpec;
-		IvParameterSpec ivspec = new IvParameterSpec(bIvSpec);
-		return ivspec;
+		IvParameterSpec ivSpec = new IvParameterSpec(bIvSpec);
+		return ivSpec;
 	}
 
 	@Override
 	public void actionPerformed(ActionEvent ae) {
 		Object source = ae.getSource();
 		
+		//Encrypt button clicked
 		if(source == btnEncrypt) {
 			if(selectedFileType == TYPE_DIR) {
 				runOnFolder(Cipher.ENCRYPT_MODE);
@@ -210,6 +259,7 @@ public class encrypter implements ActionListener {
 				runCipher(Cipher.ENCRYPT_MODE);
 			}
 		} 
+		//Decrypt button clicked
 		else if(source == btnDecrypt) {
 			if(selectedFileType == TYPE_DIR) {
 				runOnFolder(Cipher.DECRYPT_MODE);
@@ -225,7 +275,7 @@ public class encrypter implements ActionListener {
 	            actingOnFile = fSelectedFile.getAbsolutePath(); //Store the path for later use
 	            textField.setText(actingOnFile); 
 	            
-	            //Store the type
+	            //Store the type of the selected object
 	            if(fSelectedFile.isFile()) selectedFileType = TYPE_FILE;
 	            else if(fSelectedFile.isDirectory()) selectedFileType = TYPE_DIR;
 	            else selectedFileType = -1;
